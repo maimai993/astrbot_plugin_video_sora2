@@ -7,7 +7,7 @@
       "自动获取"
     ],
     "default": "手动填写",
-    "hint": "选择Token获取方式：手动填写或通过WebSocket自动获取"
+    "hint": "选择Token获取方式：手动填写或通过HTTP自动获取"
   },
   "authorization_list": {
     "description": "手动填写的authorization列表",
@@ -16,22 +16,22 @@
     "hint": "支持添加多个Token轮询使用。Token获取方式：登录 https://chatgpt.com 以后，进入 https://chatgpt.com/api/auth/session 复制 accessToken 字段的值填写进去即可，不要加 Bearer 前缀。仅在token_source为'手动填写'时生效。"
   },
   "websocket_enabled": {
-    "description": "启用WebSocket服务器",
+    "description": "启用HTTP服务器",
     "type": "bool",
     "default": false,
-    "hint": "是否启用WebSocket服务器接收自动上报的Token。仅在token_source为'自动获取'时生效。"
+    "hint": "是否启用HTTP服务器接收自动上报的Token。仅在token_source为'自动获取'时生效。"
   },
   "websocket_port": {
-    "description": "WebSocket服务器端口",
+    "description": "HTTP服务器端口",
     "type": "int",
     "default": 5103,
-    "hint": "WebSocket服务器监听的端口号，需要与Tampermonkey脚本中的端口一致。仅在token_source为'自动获取'且websocket_enabled为true时生效。"
+    "hint": "HTTP服务器监听的端口号，需要与Tampermonkey脚本中的端口一致。仅在token_source为'自动获取'且websocket_enabled为true时生效。"
   },
   "auto_token_list": {
     "description": "自动获取的Token列表",
     "type": "list",
     "default": [],
-    "hint": "通过WebSocket自动获取的Token列表，只读。仅在token_source为'自动获取'时生效。"
+    "hint": "通过HTTP自动获取的Token列表，只读。仅在token_source为'自动获取'时生效。"
   },
   "task_limit": {
     "description": "每个账号的并发限制",

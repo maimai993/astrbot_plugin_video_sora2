@@ -12,13 +12,13 @@ from astrbot.api.message_components import Video
 from astrbot.core.message.message_event_result import MessageChain
 from .utils import Utils
 from .hybrid_server import (
-    start_websocket_server,
-    stop_websocket_server,
-    is_websocket_server_running,
+    start_http_server,
+    stop_http_server,
+    is_http_server_running,
     get_auto_tokens,
     get_auto_token_info,
     refresh_auto_tokens,
-    WEBSOCKETS_AVAILABLE
+    AIOHTTP_AVAILABLE
 )
 
 
@@ -58,9 +58,9 @@ class VideoSora(Star):
         
         # 根据Token来源初始化auth_dict
         if self.token_source == "自动获取":
-            # 自动获取模式：从WebSocket服务器获取Token
+            # 自动获取模式：从HTTP服务器获取Token
             self.auth_dict = {}
-            logger.info(f"🔧 Token获取模式: 自动获取 (WebSocket端口: {self.websocket_port})")
+            logger.info(f"🔧 Token获取模式: 自动获取 (HTTP端口: {self.websocket_port})")
         else:
             # 手动填写模式：从配置文件中读取
             self.auth_dict = dict.fromkeys(self.config.get("authorization_list", []), 0)
@@ -104,29 +104,29 @@ class VideoSora(Star):
         """)
         self.conn.commit()
         
-        # 如果配置为自动获取Token且启用了WebSocket服务器，则启动WebSocket服务器
+        # 如果配置为自动获取Token且启用了HTTP服务器，则启动HTTP服务器
         if self.token_source == "自动获取" and self.websocket_enabled:
-            if not WEBSOCKETS_AVAILABLE:
-                logger.error("❌ websockets模块未安装，无法启动WebSocket服务器")
-                logger.error("请运行: pip install websockets")
+            if not AIOHTTP_AVAILABLE:
+                logger.error("❌ aiohttp模块未安装，无法启动HTTP服务器")
+                logger.error("请运行: pip install aiohttp")
                 return
                 
             try:
-                # 启动WebSocket服务器
-                success = await start_websocket_server(self.websocket_port)
+                # 启动HTTP服务器
+                success = await start_http_server(self.websocket_port)
                 if success:
-                    logger.info(f"✅ WebSocket服务器已启动，端口: {self.websocket_port}")
+                    logger.info(f"✅ HTTP服务器已启动，端口: {self.websocket_port}")
                     logger.info("📡 等待浏览器脚本上报AccessToken...")
                     logger.info("💡 请确保Tampermonkey脚本已安装并启用")
                     
                     # 启动Token刷新任务
                     self.token_refresh_task = asyncio.create_task(self.refresh_auto_tokens_periodically())
                 else:
-                    logger.error("❌ WebSocket服务器启动失败")
+                    logger.error("❌ HTTP服务器启动失败")
             except Exception as e:
-                logger.error(f"❌ 启动WebSocket服务器时发生错误: {e}")
+                logger.error(f"❌ 启动HTTP服务器时发生错误: {e}")
         elif self.token_source == "自动获取" and not self.websocket_enabled:
-            logger.warning("⚠️ Token获取模式为自动获取，但WebSocket服务器未启用")
+            logger.warning("⚠️ Token获取模式为自动获取，但HTTP服务器未启用")
             logger.warning("💡 请在配置中启用websocket_enabled以使用自动获取功能")
         else:
             logger.info(f"🔧 Token获取模式: {self.token_source}")
@@ -630,14 +630,14 @@ class VideoSora(Star):
             while True:
                 # 每30秒刷新一次Token
                 await asyncio.sleep(30)
-                await self.update_auth_dict_from_websocket()
+                await self.update_auth_dict_from_http()
         except asyncio.CancelledError:
             logger.info("Token刷新任务已取消")
         except Exception as e:
             logger.error(f"Token刷新任务发生错误: {e}")
     
-    async def update_auth_dict_from_websocket(self):
-        """从WebSocket服务器更新auth_dict"""
+    async def update_auth_dict_from_http(self):
+        """从HTTP服务器更新auth_dict"""
         if self.token_source != "自动获取" or not self.websocket_enabled:
             return
             
@@ -697,7 +697,7 @@ class VideoSora(Star):
         if not self.websocket_enabled:
             yield event.chain_result([
                 Comp.Reply(id=event.message_obj.message_id),
-                Comp.Plain("WebSocket服务器未启用，无法查看自动获取的Token状态")
+                Comp.Plain("HTTP服务器未启用，无法查看自动获取的Token状态")
             ])
             return
             
@@ -712,7 +712,7 @@ class VideoSora(Star):
         
         # 构建状态消息
         message = "📊 自动获取Token状态\n\n"
-        message += f"🔗 WebSocket服务器: {'✅ 运行中' if is_websocket_server_running() else '❌ 未运行'}\n"
+        message += f"🔗 HTTP服务器: {'✅ 运行中' if is_http_server_running() else '❌ 未运行'}\n"
         message += f"📡 端口: {self.websocket_port}\n"
         message += f"🔑 Token总数: {len(token_info_list)}\n\n"
         
@@ -762,7 +762,7 @@ class VideoSora(Star):
         if not self.websocket_enabled:
             yield event.chain_result([
                 Comp.Reply(id=event.message_obj.message_id),
-                Comp.Plain("WebSocket服务器未启用，无法刷新自动获取的Token")
+                Comp.Plain("HTTP服务器未启用，无法刷新自动获取的Token")
             ])
             return
             
@@ -795,9 +795,9 @@ class VideoSora(Star):
                 except asyncio.CancelledError:
                     pass
             
-            # 停止WebSocket服务器
+            # 停止HTTP服务器
             if self.token_source == "自动获取" and self.websocket_enabled:
-                await stop_websocket_server()
+                await stop_http_server()
             
             # 关闭其他资源
             await self.utils.close()
