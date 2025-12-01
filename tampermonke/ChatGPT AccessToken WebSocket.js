@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT AccessToken WebSocket 上报
+// @name         ChatGPT AccessToken WebSocket 上报 (修复CSP版本)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  提取accessToken并通过WebSocket上报到 ws://localhost:5103/ws
+// @version      1.1
+// @description  提取accessToken并通过WebSocket上报到 ws://localhost:5103/ws (修复CSP问题)
 // @author       maimai
 // @match        https://chatgpt.com/*
 // @grant        GM_xmlhttpRequest
@@ -11,6 +11,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        unsafeWindow
+// @connect      localhost
+// @connect      127.0.0.1
 // @run-at       document-start
 // ==/UserScript==
 
@@ -80,6 +82,18 @@
             ws.onerror = function(error) {
                 console.log('[Token WS] ❌ WebSocket错误:', error);
                 isConnected = false;
+                
+                // 显示详细的错误信息
+                if (error && error.message) {
+                    console.log('[Token WS] 🔍 错误详情:', error.message);
+                }
+                
+                // 检查是否是CSP错误
+                if (error && (error.message && error.message.includes('CSP') || 
+                    error.message && error.message.includes('Content Security Policy'))) {
+                    console.log('[Token WS] ⚠️ 检测到CSP错误，尝试备用方案...');
+                    showCSPWarning();
+                }
             };
             
             ws.onclose = function(event) {
@@ -105,6 +119,17 @@
             
         } catch (error) {
             console.log('[Token WS] ❌ 创建WebSocket失败:', error);
+            
+            // 如果是CSP错误，提供解决方案
+            if (error.message && error.message.includes('Content Security Policy')) {
+                console.log('[Token WS] ⚠️ CSP阻止了WebSocket连接');
+                console.log('[Token WS] 💡 解决方案:');
+                console.log('[Token WS]   1. 确保Tampermonkey已启用');
+                console.log('[Token WS]   2. 检查脚本是否有@connect localhost权限');
+                console.log('[Token WS]   3. 尝试重启浏览器');
+                showCSPWarning();
+            }
+            
             setTimeout(connectWebSocket, RETRY_INTERVAL);
         }
     }
@@ -267,7 +292,25 @@
         console.log('[Token WS] 🔄 自动刷新倒计时已启动');
     }
 
-    // 8. 页面控制台命令
+    // 8. 显示CSP警告
+    function showCSPWarning() {
+        console.log('[Token WS] ⚠️ ⚠️ ⚠️ 重要: CSP阻止了WebSocket连接');
+        console.log('[Token WS] 💡 解决方案:');
+        console.log('[Token WS]   1. 确保Tampermonkey已启用');
+        console.log('[Token WS]   2. 检查脚本是否有@connect localhost权限');
+        console.log('[Token WS]   3. 在Tampermonkey设置中启用"允许访问本地文件"');
+        console.log('[Token WS]   4. 尝试使用备用方案:');
+        console.log('[Token WS]      - 使用HTTP代理替代WebSocket');
+        console.log('[Token WS]      - 修改浏览器CSP设置（不推荐）');
+        
+        GM_notification({
+            title: '⚠️ CSP警告',
+            text: '内容安全策略阻止了WebSocket连接，请检查Tampermonkey设置',
+            timeout: 8000
+        });
+    }
+
+    // 9. 页面控制台命令
     function setupConsoleCommands() {
         unsafeWindow.tokenWS = {
             // 手动提取并发送Token
@@ -298,6 +341,33 @@
             reloadPage: function() {
                 console.log('[Token WS] 🔄 手动刷新页面...');
                 location.reload();
+            },
+            
+            // 诊断CSP问题
+            diagnoseCSP: function() {
+                console.log('[Token WS] 🔍 诊断CSP问题...');
+                console.log('[Token WS] 当前URL:', window.location.href);
+                console.log('[Token WS] Tampermonkey版本:', GM_info ? GM_info.version : '未知');
+                console.log('[Token WS] 脚本权限:', GM_info ? GM_info.script.grants : '未知');
+                
+                // 测试WebSocket连接
+                try {
+                    const testWs = new WebSocket('ws://localhost:5103/ws');
+                    testWs.onerror = function(e) {
+                        console.log('[Token WS] ❌ WebSocket测试失败:', e);
+                    };
+                    testWs.onopen = function() {
+                        console.log('[Token WS] ✅ WebSocket测试成功');
+                        testWs.close();
+                    };
+                    setTimeout(() => {
+                        if (testWs.readyState !== WebSocket.OPEN) {
+                            console.log('[Token WS] ⏱️ WebSocket测试超时');
+                        }
+                    }, 2000);
+                } catch (e) {
+                    console.log('[Token WS] ❌ 创建WebSocket测试失败:', e);
+                }
             }
         };
         
@@ -306,17 +376,19 @@
         console.log('   tokenWS.status() - 查看连接状态');
         console.log('   tokenWS.reconnect() - 手动重连');
         console.log('   tokenWS.reloadPage() - 手动刷新页面');
+        console.log('   tokenWS.diagnoseCSP() - 诊断CSP问题');
     }
 
-    // 9. 主函数
+    // 10. 主函数
     function main() {
         console.clear();
         console.log('══════════════════════════════════════════════════════════');
-        console.log('        ChatGPT Token WebSocket 上报服务 v7.0           ');
+        console.log('   ChatGPT Token WebSocket 上报服务 v1.1 (修复CSP)      ');
         console.log('══════════════════════════════════════════════════════════');
         console.log('');
         console.log('🌐 WebSocket服务器:', WS_URL);
         console.log('⏰ 自动刷新间隔: 10分钟');
+        console.log('🔧 已添加@connect localhost权限');
         console.log('');
         console.log('📡 工作流程:');
         console.log('   1. 连接WebSocket服务器');
@@ -335,7 +407,7 @@
         setTimeout(connectWebSocket, 1000);
     }
 
-    // 10. 页面卸载清理
+    // 11. 页面卸载清理
     window.addEventListener('beforeunload', function() {
         console.log('[Token WS] 🧹 页面卸载，清理资源...');
         stopHeartbeat();
