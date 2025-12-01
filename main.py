@@ -40,7 +40,7 @@ class VideoSora(Star):
         self.save_video_enabled = self.config.get("save_video_enabled", False)
         self.watermark_enabled = self.config.get("watermark_enabled", False)
         self.video_data_dir = os.path.join(
-            StarTools.get_data_dir("astrbot_plugin_video_sora"), "videos"
+            StarTools.get_data_dir("astrbot_plugin_video_sora2"), "videos"
         )
         self.utils = Utils(
             sora_base_url,
@@ -80,7 +80,7 @@ class VideoSora(Star):
         os.makedirs(self.video_data_dir, exist_ok=True)
         # 数据库文件路径
         video_db_path = os.path.join(
-            StarTools.get_data_dir("astrbot_plugin_video_sora"), "video_data.db"
+            StarTools.get_data_dir("astrbot_plugin_video_sora2"), "video_data.db"
         )
         # 打开持久化连接
         self.conn = sqlite3.connect(video_db_path)

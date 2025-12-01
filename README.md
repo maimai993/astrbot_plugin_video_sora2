@@ -2,7 +2,7 @@
 
 # 🫧 AstrBot Sora 视频生成插件 🫧
 
-![:访问量](https://count.getloli.com/@astrbot_plugin_video_sora?name=astrbot_plugin_video_sora&theme=rule34&padding=7&offset=0&scale=1&pixelated=1&darkmode=auto)
+![:访问量](https://count.getloli.com/@astrbot_plugin_video_sora2?name=astrbot_plugin_video_sora2&theme=rule34&padding=7&offset=0&scale=1&pixelated=1&darkmode=auto)
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org)
