@@ -18,12 +18,46 @@
 
 ## 获取网页鉴权（accessToken）
 
+插件支持两种方式获取ChatGPT AccessToken：
+
+### 方式一：手动填写（传统方式）
 > 📝 建议使用浏览器的隐身模式，避免切换账号导致 Token 失效。
 
 1. 登录 https://chatgpt.com
 2. 打开 https://chatgpt.com/api/auth/session
 3. 复制返回内容中的 accessToken 字段填写进插件配置，不需要加 `Bearer ` 前缀。
 4. 打开 https://sora.com 检查账号是否有 Sora 模型的使用权限。注意是新版 Sora。
+
+### 方式二：自动获取（推荐）
+通过Tampermonkey脚本自动获取并上报Token到本地WebSocket服务器。
+
+#### 配置步骤：
+1. **插件配置**：
+   - 在插件配置中，将 `token_source` 设置为 `auto`（自动获取）
+   - 启用WebSocket服务器：`websocket_enabled` 设置为 `true`
+   - 设置WebSocket端口：`websocket_port`（默认：5103）
+   - 自动获取的Token列表：`auto_token_list` 会自动填充
+
+2. **安装Tampermonkey脚本**：
+   - 安装Tampermonkey浏览器扩展
+   - 创建新脚本，复制 `tampermonke/ChatGPT AccessToken WebSocket.js` 文件内容
+   - 保存并启用脚本
+
+3. **使用流程**：
+   - 启动插件，WebSocket服务器会自动启动
+   - 使用浏览器登录ChatGPT（https://chatgpt.com）
+   - Tampermonkey脚本会自动提取AccessToken并通过WebSocket上报到本地服务器
+   - 插件会自动接收并更新Token列表
+
+#### 脚本功能：
+- 自动检测ChatGPT登录状态
+- 提取AccessToken并通过WebSocket上报
+- 支持多账号切换自动更新
+- 心跳机制保持连接活跃
+
+#### 管理命令：
+- `/sora自动token状态` - 查看自动获取的Token状态
+- `/sora刷新自动token` - 手动刷新自动获取的Token列表
 
 ## Sora2 邀请码
 

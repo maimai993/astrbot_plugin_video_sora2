@@ -11,6 +11,15 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.message_components import Video
 from astrbot.core.message.message_event_result import MessageChain
 from .utils import Utils
+from .websocket_server import (
+    start_websocket_server,
+    stop_websocket_server,
+    is_websocket_server_running,
+    get_auto_tokens,
+    get_auto_token_info,
+    refresh_auto_tokens,
+    WEBSOCKETS_AVAILABLE
+)
 
 
 # 获取视频下载地址
@@ -41,13 +50,29 @@ class VideoSora(Star):
             self.video_data_dir,
             self.watermark_enabled,
         )
-        self.auth_dict = dict.fromkeys(self.config.get("authorization_list", []), 0)
+        
+        # Token来源配置
+        self.token_source = self.config.get("token_source", "手动填写")
+        self.websocket_enabled = self.config.get("websocket_enabled", False)
+        self.websocket_port = self.config.get("websocket_port", 5103)
+        
+        # 根据Token来源初始化auth_dict
+        if self.token_source == "自动获取":
+            # 自动获取模式：从WebSocket服务器获取Token
+            self.auth_dict = {}
+            logger.info(f"🔧 Token获取模式: 自动获取 (WebSocket端口: {self.websocket_port})")
+        else:
+            # 手动填写模式：从配置文件中读取
+            self.auth_dict = dict.fromkeys(self.config.get("authorization_list", []), 0)
+            logger.info(f"🔧 Token获取模式: 手动填写 (Token数量: {len(self.auth_dict)})")
+        
         self.screen_mode = self.config.get("screen_mode", "自动")
         self.def_prompt = self.config.get("default_prompt", "生成一个多镜头视频")
         self.polling_task = set()
         self.task_limit = int(self.config.get("task_limit", 3))
         self.group_whitelist_enabled = self.config.get("group_whitelist_enabled")
         self.group_whitelist = self.config.get("group_whitelist")
+        self.websocket_server_task = None
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
@@ -78,6 +103,33 @@ class VideoSora(Star):
             )
         """)
         self.conn.commit()
+        
+        # 如果配置为自动获取Token且启用了WebSocket服务器，则启动WebSocket服务器
+        if self.token_source == "自动获取" and self.websocket_enabled:
+            if not WEBSOCKETS_AVAILABLE:
+                logger.error("❌ websockets模块未安装，无法启动WebSocket服务器")
+                logger.error("请运行: pip install websockets")
+                return
+                
+            try:
+                # 启动WebSocket服务器
+                success = await start_websocket_server(self.websocket_port)
+                if success:
+                    logger.info(f"✅ WebSocket服务器已启动，端口: {self.websocket_port}")
+                    logger.info("📡 等待浏览器脚本上报AccessToken...")
+                    logger.info("💡 请确保Tampermonkey脚本已安装并启用")
+                    
+                    # 启动Token刷新任务
+                    self.token_refresh_task = asyncio.create_task(self.refresh_auto_tokens_periodically())
+                else:
+                    logger.error("❌ WebSocket服务器启动失败")
+            except Exception as e:
+                logger.error(f"❌ 启动WebSocket服务器时发生错误: {e}")
+        elif self.token_source == "自动获取" and not self.websocket_enabled:
+            logger.warning("⚠️ Token获取模式为自动获取，但WebSocket服务器未启用")
+            logger.warning("💡 请在配置中启用websocket_enabled以使用自动获取功能")
+        else:
+            logger.info(f"🔧 Token获取模式: {self.token_source}")
 
     async def queue_task(
         self,
@@ -147,15 +199,15 @@ class VideoSora(Star):
             err = None
             # 获取视频下载地址
             while elapsed < MAX_WAIT:
-                (
-                    status,
-                    video_url,
-                    generation_id,
-                    err,
-                ) = await self.utils.fetch_video_url(task_id, authorization)
-                if video_url or status == "EXCEPTION":
-                    break
-                if status == "Failed":
+            #    (
+            #        status,
+            #        video_url,
+            #        generation_id,
+            #        err,
+            #    ) = await self.utils.fetch_video_url(task_id, authorization)
+            #    if video_url or status == "EXCEPTION":
+            #        break
+            #    if status == "Failed":
                     # 降级查询，尝试通过web端点获取视频链接或者失败原因
                     (
                         status,
@@ -165,8 +217,8 @@ class VideoSora(Star):
                     ) = await self.utils.get_video_by_web(task_id, authorization)
                     if video_url or status in {"Failed", "EXCEPTION"}:
                         break
-                await asyncio.sleep(INTERVAL)
-                elapsed += INTERVAL
+                    await asyncio.sleep(INTERVAL)
+                    elapsed += INTERVAL
 
             # 更新任务进度
             self.cursor.execute(
@@ -572,9 +624,182 @@ class VideoSora(Star):
             ]
         )
 
+    async def refresh_auto_tokens_periodically(self):
+        """定期刷新自动获取的Token"""
+        try:
+            while True:
+                # 每30秒刷新一次Token
+                await asyncio.sleep(30)
+                await self.update_auth_dict_from_websocket()
+        except asyncio.CancelledError:
+            logger.info("Token刷新任务已取消")
+        except Exception as e:
+            logger.error(f"Token刷新任务发生错误: {e}")
+    
+    async def update_auth_dict_from_websocket(self):
+        """从WebSocket服务器更新auth_dict"""
+        if self.token_source != "自动获取" or not self.websocket_enabled:
+            return
+            
+        try:
+            # 获取自动获取的Token列表
+            auto_tokens = get_auto_tokens()
+            if not auto_tokens:
+                # 如果没有Token，清空auth_dict
+                if self.auth_dict:
+                    self.auth_dict.clear()
+                    logger.warning("⚠️ 自动获取的Token列表为空，已清空auth_dict")
+                return
+            
+            # 更新auth_dict
+            new_tokens = []
+            for token in auto_tokens:
+                if token not in self.auth_dict:
+                    # 新Token，初始并发数为0
+                    self.auth_dict[token] = 0
+                    new_tokens.append(token)
+            
+            # 移除已过期的Token
+            expired_tokens = []
+            for token in list(self.auth_dict.keys()):
+                if token not in auto_tokens:
+                    expired_tokens.append(token)
+                    del self.auth_dict[token]
+            
+            # 记录日志
+            if new_tokens:
+                logger.info(f"✅ 新增{len(new_tokens)}个自动获取的Token")
+                for token in new_tokens:
+                    logger.info(f"🔑 新Token: {token[:16]}...")
+            
+            if expired_tokens:
+                logger.info(f"🗑️ 移除{len(expired_tokens)}个已过期的Token")
+                for token in expired_tokens:
+                    logger.info(f"🔑 已移除Token: {token[:16]}...")
+            
+            if new_tokens or expired_tokens:
+                logger.info(f"📊 当前Token总数: {len(self.auth_dict)}")
+                
+        except Exception as e:
+            logger.error(f"❌ 更新auth_dict时发生错误: {e}")
+    
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("sora自动token状态")
+    async def check_auto_token_status(self, event: AstrMessageEvent):
+        """查看自动获取的Token状态"""
+        if self.token_source != "自动获取":
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("当前Token获取模式为手动填写，无法查看自动获取的Token状态")
+            ])
+            return
+            
+        if not self.websocket_enabled:
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("WebSocket服务器未启用，无法查看自动获取的Token状态")
+            ])
+            return
+            
+        # 获取Token信息
+        token_info_list = get_auto_token_info()
+        if not token_info_list:
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("📭 当前没有自动获取的Token\n💡 请确保Tampermonkey脚本已安装并登录ChatGPT")
+            ])
+            return
+        
+        # 构建状态消息
+        message = "📊 自动获取Token状态\n\n"
+        message += f"🔗 WebSocket服务器: {'✅ 运行中' if is_websocket_server_running() else '❌ 未运行'}\n"
+        message += f"📡 端口: {self.websocket_port}\n"
+        message += f"🔑 Token总数: {len(token_info_list)}\n\n"
+        
+        for i, token_info in enumerate(token_info_list, 1):
+            token = token_info.get('token', '')
+            user_name = token_info.get('user_name', 'unknown')
+            user_email = token_info.get('user_email', 'unknown')
+            last_updated = token_info.get('last_updated', '')
+            status = token_info.get('status', 'unknown')
+            
+            # 格式化时间
+            if last_updated:
+                try:
+                    dt = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+                    last_updated_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    last_updated_str = last_updated
+            else:
+                last_updated_str = "未知"
+            
+            # 并发数
+            concurrent = self.auth_dict.get(token, 0)
+            
+            message += f"{i}. {user_name} ({user_email})\n"
+            message += f"   状态: {status} | 并发: {concurrent}/{self.task_limit}\n"
+            message += f"   最后更新: {last_updated_str}\n"
+            message += f"   Token: {token[:16]}...\n\n"
+        
+        message += "💡 提示: 使用 'sora自动token刷新' 命令请求浏览器刷新Token"
+        
+        yield event.chain_result([
+            Comp.Reply(id=event.message_obj.message_id),
+            Comp.Plain(message)
+        ])
+    
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("sora自动token刷新")
+    async def refresh_auto_tokens_command(self, event: AstrMessageEvent):
+        """请求刷新自动获取的Token"""
+        if self.token_source != "自动获取":
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("当前Token获取模式为手动填写，无法刷新自动获取的Token")
+            ])
+            return
+            
+        if not self.websocket_enabled:
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("WebSocket服务器未启用，无法刷新自动获取的Token")
+            ])
+            return
+            
+        yield event.chain_result([
+            Comp.Reply(id=event.message_obj.message_id),
+            Comp.Plain("🔄 正在请求浏览器刷新Token...")
+        ])
+        
+        try:
+            await refresh_auto_tokens()
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain("✅ 已发送Token刷新请求到所有连接的浏览器")
+            ])
+        except Exception as e:
+            logger.error(f"❌ 刷新Token时发生错误: {e}")
+            yield event.chain_result([
+                Comp.Reply(id=event.message_obj.message_id),
+                Comp.Plain(f"❌ 刷新Token失败: {str(e)}")
+            ])
+    
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
         try:
+            # 停止Token刷新任务
+            if hasattr(self, 'token_refresh_task') and self.token_refresh_task:
+                self.token_refresh_task.cancel()
+                try:
+                    await self.token_refresh_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 停止WebSocket服务器
+            if self.token_source == "自动获取" and self.websocket_enabled:
+                await stop_websocket_server()
+            
+            # 关闭其他资源
             await self.utils.close()
             self.conn.commit()
             self.cursor.close()
