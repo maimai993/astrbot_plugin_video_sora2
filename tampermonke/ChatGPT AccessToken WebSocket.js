@@ -13,6 +13,8 @@
 // @grant        unsafeWindow
 // @connect      localhost
 // @connect      127.0.0.1
+// @connect      ws://localhost:5103
+// @connect      ws://127.0.0.1:5103
 // @run-at       document-start
 // ==/UserScript==
 
@@ -21,6 +23,7 @@
     
     // 配置
     const WS_URL = 'ws://localhost:5103/ws';
+    const FALLBACK_HTTP_URL = 'http://localhost:5103/api/token'; // 备用HTTP端点
     const REFRESH_INTERVAL = 10 * 60 * 1000; // 10分钟
     const RETRY_INTERVAL = 5000; // 重试间隔
     let ws = null;
@@ -33,6 +36,9 @@
     // 1. WebSocket 连接管理
     function connectWebSocket() {
         console.log('[Token WS] 🔗 正在连接WebSocket服务器...');
+        
+        // 先尝试诊断CSP问题
+        tokenWS.diagnoseCSP();
         
         try {
             ws = new WebSocket(WS_URL);
@@ -93,6 +99,8 @@
                     error.message && error.message.includes('Content Security Policy'))) {
                     console.log('[Token WS] ⚠️ 检测到CSP错误，尝试备用方案...');
                     showCSPWarning();
+                    // 尝试备用HTTP方案
+                    setTimeout(tryHttpFallback, 2000);
                 }
             };
             
@@ -310,7 +318,115 @@
         });
     }
 
-    // 9. 页面控制台命令
+    // 9. 备用HTTP方案
+    function tryHttpFallback() {
+        console.log('[Token WS] 🔄 尝试HTTP备用方案...');
+        
+        // 使用GM_xmlhttpRequest发送Token到HTTP端点
+        extractAndSendTokenViaHTTP();
+    }
+    
+    function extractAndSendTokenViaHTTP() {
+        console.log('[Token WS] 🔍 通过HTTP提取并发送Token...');
+        
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: 'https://chatgpt.com/api/auth/session',
+            timeout: 10000,
+            onload: function(response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    
+                    if (data && data.accessToken && data.user) {
+                        const tokenData = {
+                            type: 'token_update',
+                            timestamp: new Date().toISOString(),
+                            accessToken: data.accessToken,
+                            user: {
+                                id: data.user.id,
+                                name: data.user.name,
+                                email: data.user.email
+                            },
+                            account: data.account,
+                            expires: data.expires,
+                            status: 'active',
+                            transport: 'http_fallback'
+                        };
+                        
+                        // 尝试通过HTTP发送到服务器
+                        sendTokenViaHTTP(tokenData);
+                    } else {
+                        console.log('[Token WS] ⚠️ HTTP备用方案: 会话数据中未找到Token');
+                    }
+                } catch (e) {
+                    console.log('[Token WS] ⚠️ HTTP备用方案: 解析会话数据失败:', e);
+                }
+            },
+            onerror: function(error) {
+                console.log('[Token WS] ⚠️ HTTP备用方案: 请求会话接口失败:', error.statusText);
+            }
+        });
+    }
+    
+    function sendTokenViaHTTP(tokenData) {
+        console.log('[Token WS] 📡 HTTP备用方案: 发送Token数据到HTTP端点...');
+        
+        // 移除type字段，因为HTTP端点期望不同的格式
+        const httpData = {
+            accessToken: tokenData.accessToken,
+            user: tokenData.user,
+            account: tokenData.account,
+            expires: tokenData.expires,
+            status: tokenData.status,
+            timestamp: tokenData.timestamp,
+            transport: 'http_fallback'
+        };
+        
+        GM_xmlhttpRequest({
+            method: 'POST',
+            url: FALLBACK_HTTP_URL,
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify(httpData),
+            timeout: 10000,
+            onload: function(response) {
+                if (response.status >= 200 && response.status < 300) {
+                    console.log('[Token WS] ✅ HTTP备用方案: Token发送成功:', response.status, response.responseText);
+                    GM_notification({
+                        title: '✅ HTTP备用方案成功',
+                        text: `Token已通过HTTP发送到服务器`,
+                        timeout: 4000
+                    });
+                } else {
+                    console.log('[Token WS] ⚠️ HTTP备用方案: 服务器返回错误:', response.status, response.responseText);
+                    GM_notification({
+                        title: '⚠️ HTTP备用方案',
+                        text: `服务器返回错误: ${response.status}`,
+                        timeout: 5000
+                    });
+                }
+            },
+            onerror: function(error) {
+                console.log('[Token WS] ❌ HTTP备用方案: 发送失败:', error.statusText);
+                GM_notification({
+                    title: '❌ HTTP备用方案失败',
+                    text: `无法连接到HTTP服务器: ${error.statusText}`,
+                    timeout: 5000
+                });
+            },
+            ontimeout: function() {
+                console.log('[Token WS] ⏱️ HTTP备用方案: 请求超时');
+                GM_notification({
+                    title: '⏱️ HTTP备用方案超时',
+                    text: 'HTTP请求超时，服务器可能未运行',
+                    timeout: 5000
+                });
+            }
+        });
+    }
+    
+    // 10. 页面控制台命令
     function setupConsoleCommands() {
         unsafeWindow.tokenWS = {
             // 手动提取并发送Token
@@ -326,7 +442,8 @@
                     wsReadyState: ws ? ws.readyState : 'no_connection',
                     reconnectAttempts: reconnectAttempts,
                     nextRefresh: refreshTimer ? 'active' : 'inactive',
-                    serverUrl: WS_URL
+                    serverUrl: WS_URL,
+                    fallbackHttpUrl: FALLBACK_HTTP_URL
                 };
             },
             
@@ -349,12 +466,17 @@
                 console.log('[Token WS] 当前URL:', window.location.href);
                 console.log('[Token WS] Tampermonkey版本:', GM_info ? GM_info.version : '未知');
                 console.log('[Token WS] 脚本权限:', GM_info ? GM_info.script.grants : '未知');
+                console.log('[Token WS] @connect指令:', GM_info ? GM_info.script.connect : '未知');
                 
                 // 测试WebSocket连接
                 try {
                     const testWs = new WebSocket('ws://localhost:5103/ws');
                     testWs.onerror = function(e) {
                         console.log('[Token WS] ❌ WebSocket测试失败:', e);
+                        // 详细错误信息
+                        if (e && e.message) {
+                            console.log('[Token WS] 🔍 错误详情:', e.message);
+                        }
                     };
                     testWs.onopen = function() {
                         console.log('[Token WS] ✅ WebSocket测试成功');
@@ -368,6 +490,22 @@
                 } catch (e) {
                     console.log('[Token WS] ❌ 创建WebSocket测试失败:', e);
                 }
+            },
+            
+            // 测试HTTP连接
+            testHttp: function() {
+                console.log('[Token WS] 🔍 测试HTTP连接...');
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'http://localhost:5103/health',
+                    timeout: 5000,
+                    onload: function(response) {
+                        console.log('[Token WS] ✅ HTTP测试成功:', response.status, response.responseText);
+                    },
+                    onerror: function(error) {
+                        console.log('[Token WS] ❌ HTTP测试失败:', error.statusText);
+                    }
+                });
             }
         };
         
@@ -388,7 +526,8 @@
         console.log('');
         console.log('🌐 WebSocket服务器:', WS_URL);
         console.log('⏰ 自动刷新间隔: 10分钟');
-        console.log('🔧 已添加@connect localhost权限');
+        console.log('🔧 @connect指令: localhost, 127.0.0.1, ws://localhost:5103, ws://127.0.0.1:5103');
+        console.log('🔄 HTTP备用方案:', FALLBACK_HTTP_URL);
         console.log('');
         console.log('📡 工作流程:');
         console.log('   1. 连接WebSocket服务器');

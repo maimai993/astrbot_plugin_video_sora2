@@ -11,7 +11,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.message_components import Video
 from astrbot.core.message.message_event_result import MessageChain
 from .utils import Utils
-from .websocket_server import (
+from .hybrid_server import (
     start_websocket_server,
     stop_websocket_server,
     is_websocket_server_running,
