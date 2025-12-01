@@ -40,7 +40,7 @@
 
 2. **安装Tampermonkey脚本**：
    - 安装Tampermonkey浏览器扩展
-   - 创建新脚本，复制 `tampermonke/ChatGPT AccessToken HTTP.js` 文件内容
+   - 创建新脚本，复制 [ChatGPT AccessToken HTTP.js](https://github.com/maimai993/astrbot_plugin_video_sora2/blob/main/tampermonke/ChatGPT%20AccessToken%20HTTP.js) 文件内容
    - 保存并启用脚本
 
 3. **使用流程**：
