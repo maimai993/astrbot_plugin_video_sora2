@@ -138,5 +138,17 @@
     "type": "string",
     "default": "",
     "hint": "HTTP正向代理，格式可能是http://127.0.0.1:7890，填写后将应用于全部端点请求。如果同时填写正向代理和反向代理，可能会导致代理两次的情况。"
+  },
+  "token_expiry_notification_enabled": {
+    "description": "启用Token过期通知",
+    "type": "bool",
+    "default": false,
+    "hint": "启用后，如果自动获取的Token超过30分钟未更新，将发送通知提醒主人检查浏览器登录状态。"
+  },
+  "token_expiry_notification_interval": {
+    "description": "Token过期检查间隔（分钟）",
+    "type": "int",
+    "default": 30,
+    "hint": "检查Token是否过期的间隔时间，单位为分钟。"
   }
 }

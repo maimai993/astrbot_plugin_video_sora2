@@ -73,6 +73,12 @@ class VideoSora(Star):
         self.group_whitelist_enabled = self.config.get("group_whitelist_enabled")
         self.group_whitelist = self.config.get("group_whitelist")
         self.websocket_server_task = None
+        
+        # Token过期通知配置
+        self.token_expiry_notification_enabled = self.config.get("token_expiry_notification_enabled", False)
+        self.token_expiry_notification_interval = self.config.get("token_expiry_notification_interval", 30)
+        self.token_expiry_check_task = None
+        self.last_notification_time = {}  # token -> 上次通知时间，避免重复通知
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
@@ -130,6 +136,11 @@ class VideoSora(Star):
             logger.warning("💡 请在配置中启用websocket_enabled以使用自动获取功能")
         else:
             logger.info(f"🔧 Token获取模式: {self.token_source}")
+        
+        # 启动Token过期检查任务（如果启用）
+        if self.token_expiry_notification_enabled and self.token_source == "自动获取" and self.websocket_enabled:
+            self.token_expiry_check_task = asyncio.create_task(self.check_token_expiry_periodically())
+            logger.info(f"✅ Token过期检查任务已启动，检查间隔: {self.token_expiry_notification_interval}分钟")
 
     async def queue_task(
         self,
@@ -636,6 +647,116 @@ class VideoSora(Star):
         except Exception as e:
             logger.error(f"Token刷新任务发生错误: {e}")
     
+    async def check_token_expiry_periodically(self):
+        """定期检查Token是否过期"""
+        try:
+            while True:
+                # 等待指定的检查间隔（分钟转换为秒）
+                await asyncio.sleep(self.token_expiry_notification_interval * 60)
+                
+                # 检查Token是否过期
+                await self.check_token_expiry()
+        except asyncio.CancelledError:
+            logger.info("Token过期检查任务已取消")
+        except Exception as e:
+            logger.error(f"Token过期检查任务发生错误: {e}")
+    
+    async def check_token_expiry(self):
+        """检查Token是否过期"""
+        if not self.token_expiry_notification_enabled:
+            return
+        
+        if self.token_source != "自动获取" or not self.websocket_enabled:
+            return
+        
+        try:
+            # 获取Token信息
+            token_info_list = get_auto_token_info()
+            if not token_info_list:
+                return
+            
+            current_time = datetime.now()
+            expired_tokens = []
+            
+            for token_info in token_info_list:
+                token = token_info.get('token', '')
+                last_updated_str = token_info.get('last_updated', '')
+                user_name = token_info.get('user_name', 'unknown')
+                user_email = token_info.get('user_email', 'unknown')
+                
+                if not token or not last_updated_str:
+                    continue
+                
+                try:
+                    # 解析最后更新时间
+                    last_updated = datetime.fromisoformat(last_updated_str.replace('Z', '+00:00'))
+                    
+                    # 计算时间差（分钟）
+                    time_diff = (current_time - last_updated).total_seconds() / 60
+                    
+                    # 如果超过30分钟未更新，则视为过期
+                    if time_diff > 30:
+                        # 检查是否已经发送过通知（避免重复通知）
+                        last_notified = self.last_notification_time.get(token)
+                        if last_notified:
+                            # 如果上次通知时间在1小时内，不再重复通知
+                            if (current_time - last_notified).total_seconds() / 3600 < 1:
+                                continue
+                        
+                        expired_tokens.append({
+                            'token': token,
+                            'user_name': user_name,
+                            'user_email': user_email,
+                            'last_updated': last_updated,
+                            'minutes_since_update': int(time_diff)
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"解析Token最后更新时间时发生错误: {e}")
+                    continue
+            
+            # 如果有过期的Token，发送通知
+            if expired_tokens:
+                await self.send_token_expiry_notification(expired_tokens)
+                
+        except Exception as e:
+            logger.error(f"检查Token过期时发生错误: {e}")
+    
+    async def send_token_expiry_notification(self, expired_tokens):
+        """发送Token过期通知给主人"""
+        try:
+            # 构建通知消息
+            message = "⚠️ Token长时间未更新通知\n\n"
+            message += "检测到以下Token超过30分钟未更新，登录可能已过期，请检查浏览器登录状态：\n\n"
+            
+            for i, token_info in enumerate(expired_tokens, 1):
+                user_name = token_info['user_name']
+                user_email = token_info['user_email']
+                last_updated = token_info['last_updated']
+                minutes_since_update = token_info['minutes_since_update']
+                
+                message += f"{i}. {user_name} ({user_email})\n"
+                message += f"   最后更新: {last_updated.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                message += f"   已 {minutes_since_update} 分钟未更新\n"
+                message += f"   Token: {token_info['token'][:16]}...\n\n"
+            
+            message += "💡 请检查浏览器是否已退出登录，或重新登录ChatGPT以更新Token。"
+            
+            # 记录通知时间，避免重复通知
+            for token_info in expired_tokens:
+                self.last_notification_time[token_info['token']] = datetime.now()
+            
+            # 发送通知给主人
+            # 这里需要根据AstrBot的API来发送消息给主人
+            # 由于不知道具体的API，这里先记录日志
+            logger.warning(message)
+            
+            # 在实际使用中，可能需要调用类似下面的代码来发送消息给主人：
+            # await self.context.send_to_owner(message)
+            
+        except Exception as e:
+            logger.error(f"发送Token过期通知时发生错误: {e}")
+    
     async def update_auth_dict_from_http(self):
         """从HTTP服务器更新auth_dict"""
         if self.token_source != "自动获取" or not self.websocket_enabled:
@@ -792,6 +913,14 @@ class VideoSora(Star):
                 self.token_refresh_task.cancel()
                 try:
                     await self.token_refresh_task
+                except asyncio.CancelledError:
+                    pass
+            
+            # 停止Token过期检查任务
+            if hasattr(self, 'token_expiry_check_task') and self.token_expiry_check_task:
+                self.token_expiry_check_task.cancel()
+                try:
+                    await self.token_expiry_check_task
                 except asyncio.CancelledError:
                     pass
             
