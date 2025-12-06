@@ -747,12 +747,53 @@ class VideoSora(Star):
                 self.last_notification_time[token_info['token']] = datetime.now()
             
             # 发送通知给主人
-            # 这里需要根据AstrBot的API来发送消息给主人
-            # 由于不知道具体的API，这里先记录日志
-            logger.warning(message)
-            
-            # 在实际使用中，可能需要调用类似下面的代码来发送消息给主人：
-            # await self.context.send_to_owner(message)
+            # 参考ErrorFilter插件的实现，尝试获取管理员ID并发送消息
+            try:
+                # 尝试从配置中获取管理员ID列表
+                # 首先尝试从插件的配置中获取
+                admins_id = self.config.get("admins_id", [])
+                
+                # 如果插件配置中没有，尝试从全局配置中获取
+                if not admins_id and hasattr(self.context, 'get_config'):
+                    global_config = self.context.get_config()
+                    if global_config:
+                        admins_id = global_config.get("admins_id", [])
+                
+                # 如果还没有管理员ID，尝试从机器人配置中获取
+                if not admins_id and hasattr(self, 'bot'):
+                    # 尝试获取机器人实例
+                    bot_config = getattr(self.bot, 'config', {})
+                    admins_id = bot_config.get("admins_id", [])
+                
+                # 如果有管理员ID，发送消息
+                if admins_id:
+                    for admin_id in admins_id:
+                        try:
+                            # 尝试使用AstrBot的API发送私聊消息
+                            # 首先检查是否有可用的发送消息方法
+                            if hasattr(self.context, 'post_message'):
+                                # 使用context.post_message方法
+                                await self.context.post_message(message, admin_id)
+                                logger.info(f"✅ Token过期通知已发送给管理员 {admin_id}")
+                            elif hasattr(self, 'bot') and hasattr(self.bot, 'send_private_msg'):
+                                # 使用bot.send_private_msg方法
+                                await self.bot.send_private_msg(
+                                    user_id=int(admin_id),
+                                    message=message
+                                )
+                                logger.info(f"✅ Token过期通知已发送给管理员 {admin_id}")
+                            else:
+                                # 尝试使用更通用的方法
+                                logger.warning(f"无法发送消息给管理员 {admin_id}：未找到可用的发送消息方法")
+                        except Exception as e:
+                            logger.error(f"发送Token过期通知给管理员 {admin_id} 失败: {e}")
+                else:
+                    logger.warning("未找到管理员ID，无法发送Token过期通知")
+                    logger.warning(message)  # 记录日志作为备份
+                    
+            except Exception as e:
+                logger.error(f"发送Token过期通知时发生错误: {e}")
+                logger.warning(message)  # 记录日志作为备份
             
         except Exception as e:
             logger.error(f"发送Token过期通知时发生错误: {e}")
